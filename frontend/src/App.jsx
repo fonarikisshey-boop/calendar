@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
+import './version.js'
 
 // Московское время (UTC+3) без внешних зависимостей
 const getMoscowDate = () => {
