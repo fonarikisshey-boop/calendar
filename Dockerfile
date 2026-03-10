@@ -1,27 +1,30 @@
 # Multi-stage build для Railway с SQLite
-# FORCE REBUILD - v1.0.2 BUILD 20
+# CACHE BUST: 2026-03-11-07-40-999
 
 # Stage 1: Build frontend
 FROM node:20-alpine AS frontend-build
 WORKDIR /app/frontend
 
-# Копируем package.json
+# !!! CACHE BUSTING !!! Меняйте значение при каждом rebuild
+ARG CACHE_BUST=999
+ARG BUILD_TIMESTAMP=2026-03-11-07-40-999
+RUN echo "CACHE BUST: $CACHE_BUST, TIMESTAMP: $BUILD_TIMESTAMP"
+
+# Копируем package.json первым слоем
 COPY frontend/package*.json ./
 
-# Устанавливаем зависимости без кэша
-RUN npm install --no-cache
+# Устанавливаем зависимости С ОЧИСТКОЙ КЭША
+RUN npm install && npm cache clean --force
 
-# Копируем все исходники
+# Копируем все файлы frontend
 COPY frontend/ ./
 
-# Показываем содержимое для отладки
-RUN ls -la src/
-
-# Собираем с выводом логов
-RUN npm run build 2>&1
-
-# Показываем результат сборки
-RUN ls -la dist/ && head -c 500 dist/assets/index-*.js
+# Собираем с выводом информации
+RUN echo "=== Building frontend ===" && \
+    npm run build && \
+    echo "=== Build complete ===" && \
+    ls -la dist/ && \
+    head -c 1000 dist/assets/index-*.js | grep -o "CACHE_BUST\|BUILD_TIMESTAMP\|browser_mode" || echo "No markers found"
 
 # Stage 2: Setup backend
 FROM node:20-alpine
@@ -39,8 +42,6 @@ COPY backend/ ./backend/
 
 # Copy built frontend
 COPY --from=frontend-build /app/frontend/dist ./frontend/dist
-
-# Показываем что скопировали
 RUN ls -la frontend/dist/
 
 # Environment

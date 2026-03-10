@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import './version.js'
 
-// BUILD TIMESTAMP: 2026-03-11-07-30-FORCE-REBUILD-999
-// Этот комментарий создан для принудительного изменения хеша файла
-// При каждом изменении этого комментария Vite должен сгенерировать новый хеш
+// CACHE_BUST: 999
+// BUILD_TIMESTAMP: 2026-03-11-07-40-999
+// FORCE_REBUILD: TRUE
+
+console.log('APP LOADED - CACHE_BUST: 999, TIMESTAMP: 2026-03-11-07-40-999')
 
 // Московское время (UTC+3) без внешних зависимостей
 const getMoscowDate = () => {
