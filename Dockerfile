@@ -6,8 +6,8 @@ FROM node:20-alpine AS frontend-build
 WORKDIR /app/frontend
 
 # Принудительная инвалидация кэша - меняйте это число при каждом rebuild
-ARG CACHE_BUST=10
-RUN echo "Cache bust: $CACHE_BUST - Building frontend v1.0.2"
+ARG CACHE_BUST=20
+RUN echo "Cache bust: $CACHE_BUST - Rebuilding frontend v1.0.2"
 
 # Полная очистка и пересборка
 COPY frontend/package*.json ./
