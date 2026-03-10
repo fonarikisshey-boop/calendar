@@ -3,7 +3,6 @@ import express from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
 import sqlite3 from 'sqlite3';
-import { open } from 'sqlite3';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
