@@ -31,7 +31,7 @@ function App() {
 
   // Инициализация Telegram WebApp
   useEffect(() => {
-    if (window.Telegram?.WebApp) {
+    if (window.Telegram?.WebApp?.initData) {
       const tg = window.Telegram.WebApp
       tg.ready()
       tg.expand()
