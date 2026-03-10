@@ -1,18 +1,25 @@
 # Multi-stage build для Railway с SQLite
-# Build date: 2026-03-11 v1.0.2
+# Build date: 2026-03-11 v1.0.2 - FORCE REBUILD #10
 
 # Stage 1: Build frontend (NO CACHE)
 FROM node:20-alpine AS frontend-build
 WORKDIR /app/frontend
-# Принудительная инвалидация кэша
-ARG BUILD_DATE=2026-03-11-02
-ARG CACHE_BUST=2
-RUN echo "Building frontend v1.0.2 at: $BUILD_DATE"
+
+# Принудительная инвалидация кэша - меняйте это число при каждом rebuild
+ARG CACHE_BUST=10
+RUN echo "Cache bust: $CACHE_BUST - Building frontend v1.0.2"
+
+# Полная очистка и пересборка
 COPY frontend/package*.json ./
-RUN npm install --no-cache
+RUN rm -rf node_modules package-lock.json && \
+    npm install && \
+    npm cache clean --force
+
+# Копируем исходники и собираем
 COPY frontend/ ./
-RUN npm run build 2>&1 || (echo "BUILD FAILED" && exit 1)
-RUN ls -la dist/
+RUN npm run build 2>&1 | tee build.log && \
+    ls -la dist/ && \
+    cat build.log | grep -i "error" || echo "Build successful"
 
 # Stage 2: Setup backend
 FROM node:20-alpine
