@@ -8,11 +8,7 @@ import './version.js'
 console.log('APP LOADED - CACHE_BUST: 1002, TIMESTAMP: 2026-03-11-11-00-002')
 
 // Московское время (UTC+3) без внешних зависимостей
-const getMoscowDate = () => {
-  const now = new Date()
-  const utc = now.getTime() + (now.getTimezoneOffset() * 60 * 1000)
-  return new Date(utc + (3 * 60 * 60 * 1000))
-}
+
 
 const formatDate = (date) => {
   return date.toISOString().split('T')[0]
@@ -29,7 +25,7 @@ const API_URL = ''
 
 function App() {
   const [user, setUser] = useState(null)
-  const [currentDate, setCurrentDate] = useState(getMoscowDate())
+  const [currentDate, setCurrentDate] = useState(new Date())
   const [closedDates, setClosedDates] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -208,7 +204,7 @@ function App() {
     for (let i = 1; i <= daysInMonth; i++) {
       const date = new Date(year, month, i)
       const dateStr = formatDate(date)
-      const isPast = date < new Date(today.setHours(0,0,0,0))
+      const todayDate = new Date(); todayDate.setHours(0, 0, 0, 0); const isPast = date < todayDate;
       const isClosed = closedDates.includes(dateStr)
       const isToday = dateStr === todayStr
       
