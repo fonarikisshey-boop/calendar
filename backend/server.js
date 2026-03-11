@@ -144,23 +144,38 @@ async function authMiddleware(req, res, next) {
     
     req.user = user;
     
-    // Получаем роль пользователя
+    // Проверка администраторов через переменную окружения ADMIN_IDS
+    const adminIds = (process.env.ADMIN_IDS || '').split(',').map(id => id.trim());
+    const isEnvAdmin = adminIds.includes(user.id.toString());
+
+    // Получаем роль пользователя из БД
     db.get('SELECT role FROM users WHERE telegram_id = ?', [user.id], (err, row) => {
       if (err) {
         return res.status(500).json({ error: 'Database error' });
       }
       
+      let role = row ? row.role : 'VIEWER';
+      
+      // Если ID в списке ADMIN_IDS, даем роль OWNER (или ADMIN)
+      if (isEnvAdmin) {
+        role = 'OWNER';
+      }
+
       if (!row) {
-        // Создаем нового пользователя как VIEWER
-        db.run('INSERT INTO users (telegram_id, role) VALUES (?, ?)', [user.id, 'VIEWER'], (err) => {
+        // Создаем нового пользователя
+        db.run('INSERT INTO users (telegram_id, role) VALUES (?, ?)', [user.id, role], (err) => {
           if (err) {
             return res.status(500).json({ error: 'Failed to create user' });
           }
-          req.userRole = 'VIEWER';
+          req.userRole = role;
           next();
         });
       } else {
-        req.userRole = row.role;
+        // Обновляем роль, если она изменилась в ADMIN_IDS
+        if (row.role !== role) {
+          db.run('UPDATE users SET role = ? WHERE telegram_id = ?', [role, user.id]);
+        }
+        req.userRole = role;
         next();
       }
     });
