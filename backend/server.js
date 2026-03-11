@@ -18,8 +18,35 @@ app.use(express.json());
 
 // Статические файлы
 const staticPath = path.resolve(__dirname, '../frontend/dist');
-app.use('/assets', express.static(path.join(staticPath, 'assets')));
-app.use(express.static(staticPath));
+
+// Правильные MIME типы для JS модулей
+app.use('/assets', express.static(path.join(staticPath, 'assets'), {
+  setHeaders: (res, path) => {
+    if (path.endsWith('.js')) {
+      res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    } else if (path.endsWith('.css')) {
+      res.setHeader('Content-Type', 'text/css; charset=utf-8');
+    } else if (path.endsWith('.json')) {
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    }
+    // Кэширование для продакшена
+    if (process.env.NODE_ENV === 'production') {
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    }
+  }
+}));
+
+app.use(express.static(staticPath, {
+  setHeaders: (res, path) => {
+    if (path.endsWith('.js')) {
+      res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    } else if (path.endsWith('.css')) {
+      res.setHeader('Content-Type', 'text/css; charset=utf-8');
+    } else if (path.endsWith('.json')) {
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    }
+  }
+}));
 
 // База данных SQLite
 let db;
