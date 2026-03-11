@@ -18,6 +18,7 @@ app.use(express.json());
 
 // Статические файлы
 const staticPath = path.resolve(__dirname, '../frontend/dist');
+app.use('/assets', express.static(path.join(staticPath, 'assets')));
 app.use(express.static(staticPath));
 
 // База данных SQLite
@@ -340,6 +341,11 @@ app.get('/api/health', (req, res) => {
 
 // Serve frontend
 app.get('*', (req, res) => {
+  // Если запрос к API, но не найден - возвращаем 404
+  if (req.path.startsWith('/api/')) {
+    return res.status(404).json({ error: 'API route not found' });
+  }
+  // Для всех остальных путей (навигация фронтенда) возвращаем index.html
   res.sendFile(path.join(staticPath, 'index.html'));
 });
 
