@@ -145,8 +145,14 @@ async function authMiddleware(req, res, next) {
     req.user = user;
     
     // Проверка администраторов через переменную окружения ADMIN_IDS
-    const adminIds = (process.env.ADMIN_IDS || '').split(',').map(id => id.trim());
-    const isEnvAdmin = adminIds.includes(user.id.toString());
+    const adminIdsStr = process.env.ADMIN_IDS || '';
+    const adminIds = adminIdsStr.split(',').map(id => id.trim()).filter(id => id !== '');
+    const userIdStr = user.id.toString();
+    const isEnvAdmin = adminIds.includes(userIdStr);
+
+    console.log(`[AUTH] User: ${user.username || user.first_name} (ID: ${userIdStr})`);
+    console.log(`[AUTH] Admin List: [${adminIds.join(', ')}]`);
+    console.log(`[AUTH] Is Admin from Env: ${isEnvAdmin}`);
 
     // Получаем роль пользователя из БД
     db.get('SELECT role FROM users WHERE telegram_id = ?', [user.id], (err, row) => {
@@ -160,6 +166,8 @@ async function authMiddleware(req, res, next) {
       if (isEnvAdmin) {
         role = 'OWNER';
       }
+      
+      console.log(`[AUTH] Final Role: ${role}`);
 
       if (!row) {
         // Создаем нового пользователя
