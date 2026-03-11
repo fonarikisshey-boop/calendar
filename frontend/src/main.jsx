@@ -4,7 +4,7 @@ import App from './App.jsx'
 import './index.css'
 import './version.js'
 
-console.log('MAIN.JX LOADED - v1.0.2 BUILD 20 - TIMESTAMP: ' + Date.now())
+console.log('MAIN.JX LOADED - v1.0.3 BUILD 21 - TIMESTAMP: ' + Date.now())
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>

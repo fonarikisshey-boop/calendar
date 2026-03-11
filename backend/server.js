@@ -17,7 +17,7 @@ app.use(cors());
 app.use(express.json());
 
 // Статические файлы
-const staticPath = path.join(__dirname, '../frontend/dist');
+const staticPath = path.resolve(__dirname, '../frontend/dist');
 app.use(express.static(staticPath));
 
 // База данных SQLite

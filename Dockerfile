@@ -1,13 +1,13 @@
 # Multi-stage build для Railway с SQLite
-# CACHE BUST: 2026-03-11-07-40-999
+# CACHE BUST: 2026-03-11-10-00-001
 
 # Stage 1: Build frontend
 FROM node:20-alpine AS frontend-build
 WORKDIR /app/frontend
 
 # !!! CACHE BUSTING !!! Меняйте значение при каждом rebuild
-ARG CACHE_BUST=999
-ARG BUILD_TIMESTAMP=2026-03-11-07-40-999
+ARG CACHE_BUST=1001
+ARG BUILD_TIMESTAMP=2026-03-11-10-00-001
 RUN echo "CACHE BUST: $CACHE_BUST, TIMESTAMP: $BUILD_TIMESTAMP"
 
 # Копируем package.json первым слоем
