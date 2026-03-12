@@ -8,12 +8,21 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import cron from 'node-cron';
 import ExcelJS from 'exceljs';
+import TelegramBot from 'node-telegram-bot-api';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Инициализация бота
+const botToken = process.env.BOT_TOKEN;
+let bot;
+if (botToken) {
+  bot = new TelegramBot(botToken, { polling: false });
+  console.log('Telegram Bot initialized for reports');
+}
 
 // Middleware
 app.use(cors());
@@ -164,31 +173,27 @@ app.get('/api/user', authMiddleware, (req, res) => {
   res.json({ id: req.user.id, role: req.userRole });
 });
 
-// Экспорт в Excel (ручной запрос для теста)
-app.get('/api/export', authMiddleware, async (req, res) => {
-  if (req.userRole !== 'OWNER') return res.status(403).json({ error: 'Forbidden' });
-  
-  const workbook = new ExcelJS.Workbook();
-  const sheet = workbook.addWorksheet('Closed Dates');
-  sheet.columns = [
-    { header: 'Дата', key: 'date', width: 15 },
-    { header: 'Кто закрыл (ID)', key: 'closed_by', width: 20 },
-    { header: 'Дата создания', key: 'created_at', width: 25 }
-  ];
-
-  db.all('SELECT * FROM closed_dates ORDER BY date DESC', [], async (err, rows) => {
-    rows.forEach(row => sheet.addRow(row));
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', 'attachment; filename=report.xlsx');
-    await workbook.xlsx.write(res);
-    res.end();
-  });
-});
-
 // Еженедельный отчет (Cron)
-cron.schedule('0 9 * * 1', () => {
+// Каждое воскресенье в 21:00 по Москве (UTC+3, значит 18:00 UTC)
+cron.schedule('0 18 * * 0', async () => {
   console.log('Generating weekly report...');
-  // Здесь можно добавить отправку в Telegram через бота, если будет BOT_TOKEN
+  if (!bot) return;
+
+  db.all('SELECT date FROM closed_dates ORDER BY date ASC', [], async (err, rows) => {
+    if (err || !rows || rows.length === 0) return;
+
+    const report = rows.map(r => `📅 ${r.date}`).join('\n');
+    const message = `📊 *Еженедельный отчет по бронированиям*\n\nСписок всех закрытых дат:\n${report}`;
+    
+    const adminIds = (process.env.ADMIN_IDS || '').split(',').map(id => id.trim()).filter(id => id !== '');
+    for (const adminId of adminIds) {
+      try {
+        await bot.sendMessage(adminId, message, { parse_mode: 'Markdown' });
+      } catch (e) {
+        console.error(`Failed to send report to ${adminId}:`, e.message);
+      }
+    }
+  });
 });
 
 app.get('*', (req, res) => res.sendFile(path.join(staticPath, 'index.html')));
