@@ -247,14 +247,19 @@ app.post('/api/calendar/toggle', authMiddleware, requireAdmin, (req, res) => {
     return res.status(400).json({ error: 'Date required' });
   }
   
-  // Проверяем, не прошла ли дата
+  // Проверяем, не прошла ли дата (сегодняшний день закрывать МОЖНО)
   const targetDate = new Date(date);
+  targetDate.setHours(0, 0, 0, 0);
+  
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   
   if (targetDate < today) {
+    console.log(`[TOGGLE] Attempt to modify past date: ${date}`);
     return res.status(400).json({ error: 'Cannot modify past dates' });
   }
+  
+  console.log(`[TOGGLE] Processing date: ${date}, User: ${req.user.id}`);
   
   // Проверяем, закрыта ли дата
   db.get('SELECT id FROM closed_dates WHERE date = ?', [date], (err, row) => {

@@ -204,7 +204,9 @@ function App() {
     for (let i = 1; i <= daysInMonth; i++) {
       const date = new Date(year, month, i)
       const dateStr = formatDate(date)
-      const todayDate = new Date(); todayDate.setHours(0, 0, 0, 0); const isPast = date < todayDate;
+      const todayDate = new Date(); todayDate.setHours(0, 0, 0, 0); 
+      // Прошлым днем считается тот, что строго меньше сегодняшнего (без учета времени)
+      const isPast = date < todayDate;
       const isClosed = closedDates.includes(dateStr)
       const isToday = dateStr === todayStr
       
