@@ -14,7 +14,7 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = 'v1017';
+const APP_VERSION = 'v1018';
 
 // Инициализация бота
 const botToken = process.env.BOT_TOKEN;
@@ -81,10 +81,9 @@ async function initDatabase() {
   }
 }
 
-// Хелперы для БД (Улучшенные для PostgreSQL)
+// Хелперы для БД
 async function dbQuery(sql, params = []) {
   if (isPostgres) {
-    // В PostgreSQL используем $1, $2 и НЕ добавляем ::text принудительно
     let count = 1;
     const finalSql = sql.replace(/\?/g, () => `$${count++}`);
     const res = await pool.query(finalSql, params);
@@ -139,17 +138,13 @@ async function authMiddleware(req, res, next) {
     req.user = user;
     const userIdNum = parseInt(user.id.toString().replace(/[^0-9]/g, ''), 10);
     
-    // Продвинутая очистка списка админов
     const rawAdminIds = (process.env.ADMIN_IDS || '').split(',');
     const adminIds = rawAdminIds.map(id => id.replace(/[^0-9]/g, '').trim()).filter(id => id !== '');
     const userIdStr = userIdNum.toString();
     const isEnvAdmin = adminIds.includes(userIdStr);
     
-    console.log(`[AUTH] UserID: "${userIdStr}", AdminList: ${JSON.stringify(adminIds)}, Match: ${isEnvAdmin}`);
-
     let role = isEnvAdmin ? 'OWNER' : 'VIEWER';
     
-    // Если не админ по конфигу, проверяем в БД
     if (!isEnvAdmin) {
       try {
         const row = await dbGet('SELECT role FROM users WHERE telegram_id = ?', [userIdNum]);
@@ -161,7 +156,6 @@ async function authMiddleware(req, res, next) {
 
     req.userRole = role;
     
-    // Фоновое обновление/создание пользователя в БД
     try {
       const existing = await dbGet('SELECT role FROM users WHERE telegram_id = ?', [userIdNum]);
       if (!existing) {
@@ -182,11 +176,12 @@ async function authMiddleware(req, res, next) {
 // API Routes
 app.get('/api/calendar', authMiddleware, async (req, res) => {
   try {
-    const { year, month } = req.query;
-    const startDate = `${year}-${month.toString().padStart(2, '0')}-01`;
-    const endDate = `${year}-${month.toString().padStart(2, '0')}-31`;
+    let { year, month } = req.query;
+    // Универсальная обработка месяца (добавляем ведущий ноль если нужно)
+    const formattedMonth = month.toString().padStart(2, '0');
+    const startDate = `${year}-${formattedMonth}-01`;
+    const endDate = `${year}-${formattedMonth}-31`;
     
-    // В PostgreSQL для текстовых дат используем явный поиск без лишних преобразований
     let rows;
     if (isPostgres) {
       const result = await pool.query('SELECT date FROM closed_dates WHERE date >= $1 AND date <= $2', [startDate, endDate]);
@@ -195,7 +190,7 @@ app.get('/api/calendar', authMiddleware, async (req, res) => {
       rows = await dbQuery('SELECT date FROM closed_dates WHERE date >= ? AND date <= ?', [startDate, endDate]);
     }
     
-    console.log(`[LOAD] Loaded ${(rows || []).length} closed dates for ${year}-${month}`);
+    console.log(`[LOAD] Loaded ${(rows || []).length} closed dates for ${year}-${month} (query: ${startDate} to ${endDate})`);
     res.json({ closedDates: (rows || []).map(r => r.date), userRole: req.userRole, version: APP_VERSION });
   } catch (err) {
     console.error('[API ERROR] Get calendar failed:', err.message);
@@ -210,13 +205,29 @@ app.post('/api/calendar/toggle', authMiddleware, async (req, res) => {
     const userIdNum = parseInt(req.user.id.toString().replace(/[^0-9]/g, ''), 10);
     console.log(`[TOGGLE] Processing date: ${date} by admin ${userIdNum}`);
 
-    const row = await dbGet('SELECT id FROM closed_dates WHERE date = ?', [date]);
+    // В PostgreSQL используем прямой запрос через pool для надежности
+    let row;
+    if (isPostgres) {
+      const result = await pool.query('SELECT id FROM closed_dates WHERE date = $1', [date]);
+      row = result.rows[0];
+    } else {
+      row = await dbGet('SELECT id FROM closed_dates WHERE date = ?', [date]);
+    }
+
     if (row) {
-      await dbRun('DELETE FROM closed_dates WHERE date = ?', [date]);
+      if (isPostgres) {
+        await pool.query('DELETE FROM closed_dates WHERE date = $1', [date]);
+      } else {
+        await dbRun('DELETE FROM closed_dates WHERE date = ?', [date]);
+      }
       console.log(`[TOGGLE SUCCESS] Date ${date} is now OPEN`);
       res.json({ status: 'opened' });
     } else {
-      await dbRun('INSERT INTO closed_dates (date, closed_by) VALUES (?, ?)', [date, userIdNum]);
+      if (isPostgres) {
+        await pool.query('INSERT INTO closed_dates (date, closed_by) VALUES ($1, $2)', [date, userIdNum]);
+      } else {
+        await dbRun('INSERT INTO closed_dates (date, closed_by) VALUES (?, ?)', [date, userIdNum]);
+      }
       console.log(`[TOGGLE SUCCESS] Date ${date} is now CLOSED by ${userIdNum}`);
       res.json({ status: 'closed' });
     }
