@@ -14,7 +14,7 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = 'v1016';
+const APP_VERSION = 'v1017';
 
 // Инициализация бота
 const botToken = process.env.BOT_TOKEN;
@@ -185,7 +185,17 @@ app.get('/api/calendar', authMiddleware, async (req, res) => {
     const { year, month } = req.query;
     const startDate = `${year}-${month.toString().padStart(2, '0')}-01`;
     const endDate = `${year}-${month.toString().padStart(2, '0')}-31`;
-    const rows = await dbQuery('SELECT date FROM closed_dates WHERE date >= ? AND date <= ?', [startDate, endDate]);
+    
+    // В PostgreSQL для текстовых дат используем явный поиск без лишних преобразований
+    let rows;
+    if (isPostgres) {
+      const result = await pool.query('SELECT date FROM closed_dates WHERE date >= $1 AND date <= $2', [startDate, endDate]);
+      rows = result.rows;
+    } else {
+      rows = await dbQuery('SELECT date FROM closed_dates WHERE date >= ? AND date <= ?', [startDate, endDate]);
+    }
+    
+    console.log(`[LOAD] Loaded ${(rows || []).length} closed dates for ${year}-${month}`);
     res.json({ closedDates: (rows || []).map(r => r.date), userRole: req.userRole, version: APP_VERSION });
   } catch (err) {
     console.error('[API ERROR] Get calendar failed:', err.message);
