@@ -13,7 +13,7 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = 'v1019-sqlite';
+const APP_VERSION = 'v1020-sqlite-persistent';
 
 // Инициализация бота
 const botToken = process.env.BOT_TOKEN;
@@ -38,7 +38,8 @@ app.use('/assets', express.static(path.join(staticPath, 'assets'), {
 app.use(express.static(staticPath));
 
 // База данных SQLite (локальная и сверхбыстрая)
-const dbPath = process.env.NODE_ENV === 'production' ? '/tmp/calendar.db' : './calendar.db';
+// В Railway /tmp очищается при каждом перезапуске. Используем текущую папку для постоянного хранения.
+const dbPath = path.resolve(__dirname, 'calendar.db');
 const db = new sqlite3.Database(dbPath);
 
 db.serialize(() => {
