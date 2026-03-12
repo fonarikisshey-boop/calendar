@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import './version.js'
 
-// CACHE_BUST: 1004
-// BUILD_TIMESTAMP: 2026-03-12-18-20-001
+// CACHE_BUST: 1005
+// BUILD_TIMESTAMP: 2026-03-12-18-40-001
 // FORCE_REBUILD: TRUE
 
-console.log('APP LOADED - CACHE_BUST: 1004, TIMESTAMP: 2026-03-12-18-20-001')
+console.log('APP LOADED - CACHE_BUST: 1005, TIMESTAMP: 2026-03-12-18-40-001')
 
 // Московское время (UTC+3) без внешних зависимостей
 
@@ -205,19 +205,18 @@ function App() {
       const date = new Date(year, month, i)
       const dateStr = formatDate(date)
       const todayDate = new Date(); todayDate.setHours(0, 0, 0, 0); 
-      // Исправлено: сегодняшний день (12 марта) НЕ должен быть isPast
+      // Для администраторов разрешаем клик по любой дате
       const isPast = date.getTime() < todayDate.getTime();
       const isClosed = closedDates.includes(dateStr)
       const isToday = dateStr === todayStr
       
       days.push({
-        type: 'day',
         day: i,
         dateStr,
-        isPast,
+        isPast: canManageDates() ? false : isPast, // Админ видит все даты как активные
         isClosed,
         isToday,
-        key: dateStr
+        key: `day-${i}`
       })
     }
     

@@ -156,9 +156,9 @@ app.post('/api/calendar/toggle', authMiddleware, (req, res) => {
   if (req.userRole !== 'ADMIN' && req.userRole !== 'OWNER') return res.status(403).json({ error: 'Forbidden' });
   const { date } = req.body;
   
-  const targetDate = new Date(date); targetDate.setHours(0,0,0,0);
-  const today = new Date(); today.setHours(0,0,0,0);
-  if (targetDate < today) return res.status(400).json({ error: 'Past date' });
+  // Для администраторов убираем все ограничения по датам. 
+  // Теперь можно закрывать и открывать любой день, включая сегодняшний и прошлые.
+  console.log(`[TOGGLE] Processing date: ${date} by admin ${req.user.id}`);
 
   db.get('SELECT id FROM closed_dates WHERE date = ?', [date], (err, row) => {
     if (row) {
