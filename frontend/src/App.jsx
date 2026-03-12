@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import './version.js'
 
-// CACHE_BUST: 1002
-// BUILD_TIMESTAMP: 2026-03-11-11-00-002
+// CACHE_BUST: 1004
+// BUILD_TIMESTAMP: 2026-03-12-18-20-001
 // FORCE_REBUILD: TRUE
 
-console.log('APP LOADED - CACHE_BUST: 1002, TIMESTAMP: 2026-03-11-11-00-002')
+console.log('APP LOADED - CACHE_BUST: 1004, TIMESTAMP: 2026-03-12-18-20-001')
 
 // Московское время (UTC+3) без внешних зависимостей
 
@@ -205,8 +205,8 @@ function App() {
       const date = new Date(year, month, i)
       const dateStr = formatDate(date)
       const todayDate = new Date(); todayDate.setHours(0, 0, 0, 0); 
-      // Прошлым днем считается тот, что строго меньше сегодняшнего (без учета времени)
-      const isPast = date < todayDate;
+      // Исправлено: сегодняшний день (12 марта) НЕ должен быть isPast
+      const isPast = date.getTime() < todayDate.getTime();
       const isClosed = closedDates.includes(dateStr)
       const isToday = dateStr === todayStr
       

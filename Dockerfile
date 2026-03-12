@@ -6,8 +6,8 @@ FROM node:20-alpine AS frontend-build
 WORKDIR /app/frontend
 
 # !!! CACHE BUSTING !!! Меняйте значение при каждом rebuild
-ARG CACHE_BUST=1002
-ARG BUILD_TIMESTAMP=2026-03-11-11-00-002
+ARG CACHE_BUST=1004
+ARG BUILD_TIMESTAMP=2026-03-12-18-20-001
 RUN echo "CACHE BUST: $CACHE_BUST, TIMESTAMP: $BUILD_TIMESTAMP"
 
 # Копируем package.json первым слоем
