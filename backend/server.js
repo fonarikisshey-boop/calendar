@@ -138,18 +138,36 @@ async function authMiddleware(req, res, next) {
     
     req.user = user;
     const adminIds = (process.env.ADMIN_IDS || '').split(',').map(id => id.trim()).filter(id => id !== '');
-    const isEnvAdmin = adminIds.some(id => id === user.id.toString());
-    console.log(`[AUTH] Checking user ${user.id} against admins ${JSON.stringify(adminIds)}. Is Admin: ${isEnvAdmin}`);
-
-    const row = await dbGet('SELECT role FROM users WHERE telegram_id = ?', [user.id]);
-    let role = row ? row.role : 'VIEWER';
-    if (isEnvAdmin) role = 'OWNER';
-    req.userRole = role;
+    const userIdStr = user.id.toString();
+    const isEnvAdmin = adminIds.includes(userIdStr);
     
-    if (!row) {
-      await dbRun('INSERT INTO users (telegram_id, role) VALUES (?, ?)', [user.id, role]);
-    } else if (row.role !== role) {
-      await dbRun('UPDATE users SET role = ? WHERE telegram_id = ?', [role, user.id]);
+    console.log(`[AUTH] UserID: ${userIdStr}, AdminList: ${JSON.stringify(adminIds)}, Match: ${isEnvAdmin}`);
+
+    let role = isEnvAdmin ? 'OWNER' : 'VIEWER';
+    
+    // Если не админ по конфигу, проверяем в БД (может быть назначен через БД)
+    if (!isEnvAdmin) {
+      try {
+        const row = await dbGet('SELECT role FROM users WHERE telegram_id = ?', [user.id]);
+        if (row && row.role) role = row.role;
+      } catch (e) {
+        console.error('[AUTH DB ERROR]', e.message);
+      }
+    }
+
+    req.userRole = role;
+    console.log(`[AUTH] Final assigned role: ${req.userRole}`);
+    
+    // Фоновое обновление/создание пользователя в БД
+    try {
+      const existing = await dbGet('SELECT role FROM users WHERE telegram_id = ?', [user.id]);
+      if (!existing) {
+        await dbRun('INSERT INTO users (telegram_id, role) VALUES (?, ?)', [user.id, role]);
+      } else if (existing.role !== role) {
+        await dbRun('UPDATE users SET role = ? WHERE telegram_id = ?', [role, user.id]);
+      }
+    } catch (e) {
+      console.error('[AUTH DB SYNC ERROR]', e.message);
     }
     next();
   } catch (err) {
