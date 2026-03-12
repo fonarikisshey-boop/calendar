@@ -3,8 +3,11 @@ import express from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
 import sqlite3 from 'sqlite3';
+import pg from 'pg';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import cron from 'node-cron';
+import ExcelJS from 'exceljs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -26,388 +29,171 @@ app.use('/assets', express.static(path.join(staticPath, 'assets'), {
       res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
     } else if (path.endsWith('.css')) {
       res.setHeader('Content-Type', 'text/css; charset=utf-8');
-    } else if (path.endsWith('.json')) {
-      res.setHeader('Content-Type', 'application/json; charset=utf-8');
-    }
-    // Кэширование для продакшена
-    if (process.env.NODE_ENV === 'production') {
-      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
     }
   }
 }));
 
-app.use(express.static(staticPath, {
-  setHeaders: (res, path) => {
-    if (path.endsWith('.js')) {
-      res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
-    } else if (path.endsWith('.css')) {
-      res.setHeader('Content-Type', 'text/css; charset=utf-8');
-    } else if (path.endsWith('.json')) {
-      res.setHeader('Content-Type', 'application/json; charset=utf-8');
-    }
-  }
-}));
+app.use(express.static(staticPath));
 
-// База данных SQLite
+// База данных
 let db;
+const isPostgres = !!process.env.DATABASE_URL;
 
 async function initDatabase() {
-  const dbPath = process.env.NODE_ENV === 'production' 
-    ? '/tmp/calendar.db'  // Railway разрешает писать в /tmp
-    : './calendar.db';
-  
-  db = new sqlite3.Database(dbPath);
-  
-  return new Promise((resolve, reject) => {
-    db.serialize(() => {
-      // Таблица пользователей
-      db.run(`
-        CREATE TABLE IF NOT EXISTS users (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          telegram_id INTEGER UNIQUE NOT NULL,
-          role TEXT NOT NULL DEFAULT 'VIEWER' CHECK (role IN ('OWNER', 'ADMIN', 'VIEWER')),
-          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-      `);
-      
-      // Таблица закрытых дат
-      db.run(`
-        CREATE TABLE IF NOT EXISTS closed_dates (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          date TEXT UNIQUE NOT NULL,
-          closed_by INTEGER NOT NULL,
-          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-      `);
-      
-      // Таблица настроек
-      db.run(`
-        CREATE TABLE IF NOT EXISTS settings (
-          id INTEGER PRIMARY KEY DEFAULT 1,
-          background_image TEXT,
-          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-      `, () => {
-        // Вставляем начальные настройки
-        db.run(`INSERT OR IGNORE INTO settings (id, background_image) VALUES (1, NULL)`);
-      });
+  if (isPostgres) {
+    console.log('Using PostgreSQL database');
+    const pool = new pg.Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: { rejectUnauthorized: false }
     });
     
-    console.log('SQLite database initialized at:', dbPath);
-    resolve();
-  });
+    db = {
+      all: (sql, params, cb) => pool.query(sql.replace(/\?/g, (m, i) => `$${i + 1}`), params).then(res => cb(null, res.rows)).catch(cb),
+      get: (sql, params, cb) => pool.query(sql.replace(/\?/g, (m, i) => `$${i + 1}`), params).then(res => cb(null, res.rows[0])).catch(cb),
+      run: (sql, params, cb) => pool.query(sql.replace(/\?/g, (m, i) => `$${i + 1}`), params).then(res => cb && cb(null)).catch(cb)
+    };
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        telegram_id BIGINT UNIQUE NOT NULL,
+        role TEXT NOT NULL DEFAULT 'VIEWER',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE TABLE IF NOT EXISTS closed_dates (
+        id SERIAL PRIMARY KEY,
+        date TEXT UNIQUE NOT NULL,
+        closed_by BIGINT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE TABLE IF NOT EXISTS settings (
+        id INTEGER PRIMARY KEY DEFAULT 1,
+        background_image TEXT,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      INSERT INTO settings (id, background_image) VALUES (1, NULL) ON CONFLICT (id) DO NOTHING;
+    `);
+  } else {
+    console.log('Using SQLite database');
+    const dbPath = process.env.NODE_ENV === 'production' ? '/tmp/calendar.db' : './calendar.db';
+    const sqliteDb = new sqlite3.Database(dbPath);
+    db = sqliteDb;
+    
+    db.serialize(() => {
+      db.run(`CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_id INTEGER UNIQUE NOT NULL, role TEXT NOT NULL DEFAULT 'VIEWER', created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`);
+      db.run(`CREATE TABLE IF NOT EXISTS closed_dates (id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT UNIQUE NOT NULL, closed_by INTEGER NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`);
+      db.run(`CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY DEFAULT 1, background_image TEXT, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)`);
+      db.run(`INSERT OR IGNORE INTO settings (id, background_image) VALUES (1, NULL)`);
+    });
+  }
 }
 
 // Проверка подписи Telegram WebApp
 function verifyTelegramWebAppData(initData) {
-  const secret = crypto.createHmac('sha256', 'WebAppData')
-    .update(process.env.BOT_TOKEN || '')
-    .digest();
-  
+  if (initData === 'browser_mode') return true;
+  const secret = crypto.createHmac('sha256', 'WebAppData').update(process.env.BOT_TOKEN || '').digest();
   const params = new URLSearchParams(initData);
   const hash = params.get('hash');
   params.delete('hash');
-  
-  const dataCheckString = Array.from(params.entries())
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([key, value]) => `${key}=${value}`)
-    .join('\n');
-  
-  const hmac = crypto.createHmac('sha256', secret)
-    .update(dataCheckString)
-    .digest('hex');
-  
+  const dataCheckString = Array.from(params.entries()).sort(([a], [b]) => a.localeCompare(b)).map(([key, value]) => `${key}=${value}`).join('\n');
+  const hmac = crypto.createHmac('sha256', secret).update(dataCheckString).digest('hex');
   return hmac === hash;
 }
 
 // Middleware авторизации
 async function authMiddleware(req, res, next) {
-  try {
-    const initData = req.headers['x-telegram-init-data'];
-    
-    if (!initData) {
-      return res.status(401).json({ error: 'No init data provided' });
-    }
-    
-    if (initData === 'browser_mode') {
-      req.user = { id: 0, username: 'browser', first_name: 'Browser' };
-      req.userRole = 'VIEWER';
-      return next();
-    }
-    
-    if (!verifyTelegramWebAppData(initData)) {
-      return res.status(401).json({ error: 'Invalid signature' });
-    }
-    
+  const initData = req.headers['x-telegram-init-data'];
+  if (!initData) return res.status(401).json({ error: 'No init data' });
+  if (!verifyTelegramWebAppData(initData)) return res.status(401).json({ error: 'Invalid signature' });
+
+  let user;
+  if (initData === 'browser_mode') {
+    user = { id: 0, username: 'browser' };
+  } else {
     const params = new URLSearchParams(initData);
-    const user = JSON.parse(params.get('user'));
+    user = JSON.parse(params.get('user'));
+  }
+  
+  req.user = user;
+  const adminIds = (process.env.ADMIN_IDS || '').split(',').map(id => id.trim()).filter(id => id !== '');
+  const isEnvAdmin = adminIds.includes(user.id.toString());
+
+  db.get('SELECT role FROM users WHERE telegram_id = ?', [user.id], (err, row) => {
+    let role = row ? row.role : 'VIEWER';
+    if (isEnvAdmin) role = 'OWNER';
+    req.userRole = role;
     
-    req.user = user;
-    
-    // Проверка администраторов через переменную окружения ADMIN_IDS
-    const adminIdsStr = process.env.ADMIN_IDS || '';
-    const adminIds = adminIdsStr.split(',').map(id => id.trim()).filter(id => id !== '');
-    const userIdStr = user.id.toString();
-    const isEnvAdmin = adminIds.includes(userIdStr);
-
-    console.log(`[AUTH] User: ${user.username || user.first_name} (ID: ${userIdStr})`);
-    console.log(`[AUTH] Admin List: [${adminIds.join(', ')}]`);
-    console.log(`[AUTH] Is Admin from Env: ${isEnvAdmin}`);
-
-    // Получаем роль пользователя из БД
-    db.get('SELECT role FROM users WHERE telegram_id = ?', [user.id], (err, row) => {
-      if (err) {
-        return res.status(500).json({ error: 'Database error' });
-      }
-      
-      let role = row ? row.role : 'VIEWER';
-      
-      // Если ID в списке ADMIN_IDS, даем роль OWNER (или ADMIN)
-      if (isEnvAdmin) {
-        role = 'OWNER';
-      }
-      
-      console.log(`[AUTH] Final Role: ${role}`);
-
-      if (!row) {
-        // Создаем нового пользователя
-        db.run('INSERT INTO users (telegram_id, role) VALUES (?, ?)', [user.id, role], (err) => {
-          if (err) {
-            return res.status(500).json({ error: 'Failed to create user' });
-          }
-          req.userRole = role;
-          next();
-        });
-      } else {
-        // Обновляем роль, если она изменилась в ADMIN_IDS
-        if (row.role !== role) {
-          db.run('UPDATE users SET role = ? WHERE telegram_id = ?', [role, user.id]);
-        }
-        req.userRole = role;
-        next();
-      }
-    });
-  } catch (error) {
-    console.error('Auth error:', error);
-    res.status(401).json({ error: 'Authentication failed' });
-  }
+    if (!row) {
+      db.run('INSERT INTO users (telegram_id, role) VALUES (?, ?)', [user.id, role], () => next());
+    } else {
+      if (row.role !== role) db.run('UPDATE users SET role = ? WHERE telegram_id = ?', [role, user.id]);
+      next();
+    }
+  });
 }
 
-// Проверка роли администратора
-function requireAdmin(req, res, next) {
-  if (req.userRole !== 'ADMIN' && req.userRole !== 'OWNER') {
-    return res.status(403).json({ error: 'Admin access required' });
-  }
-  next();
-}
-
-// Проверка роли владельца
-function requireOwner(req, res, next) {
-  if (req.userRole !== 'OWNER') {
-    return res.status(403).json({ error: 'Owner access required' });
-  }
-  next();
-}
-
-// Получить закрытые даты за месяц
+// API Routes
 app.get('/api/calendar', authMiddleware, (req, res) => {
   const { year, month } = req.query;
-  
-  if (!year || !month) {
-    return res.status(400).json({ error: 'Year and month required' });
-  }
-  
   const startDate = `${year}-${month.toString().padStart(2, '0')}-01`;
-  const lastDay = new Date(year, month, 0).getDate();
-  const endDate = `${year}-${month.toString().padStart(2, '0')}-${lastDay}`;
+  const endDate = `${year}-${month.toString().padStart(2, '0')}-31`;
   
-  db.all(
-    'SELECT date, closed_by, created_at FROM closed_dates WHERE date >= ? AND date <= ? ORDER BY date',
-    [startDate, endDate],
-    (err, rows) => {
-      if (err) {
-        console.error('Get calendar error:', err);
-        return res.status(500).json({ error: 'Internal server error' });
-      }
-      
-      res.json({
-        closedDates: rows,
-        userRole: req.userRole,
-        timezone: 'Europe/Moscow'
-      });
-    }
-  );
+  db.all('SELECT date FROM closed_dates WHERE date >= ? AND date <= ?', [startDate, endDate], (err, rows) => {
+    res.json({ closedDates: rows || [], userRole: req.userRole });
+  });
 });
 
-// Переключить дату
-app.post('/api/calendar/toggle', authMiddleware, requireAdmin, (req, res) => {
+app.post('/api/calendar/toggle', authMiddleware, (req, res) => {
+  if (req.userRole !== 'ADMIN' && req.userRole !== 'OWNER') return res.status(403).json({ error: 'Forbidden' });
   const { date } = req.body;
   
-  if (!date) {
-    return res.status(400).json({ error: 'Date required' });
-  }
-  
-  // Проверяем, не прошла ли дата (сегодняшний день закрывать МОЖНО)
-  const targetDate = new Date(date);
-  targetDate.setHours(0, 0, 0, 0);
-  
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  
-  if (targetDate < today) {
-    console.log(`[TOGGLE] Attempt to modify past date: ${date}`);
-    return res.status(400).json({ error: 'Cannot modify past dates' });
-  }
-  
-  console.log(`[TOGGLE] Processing date: ${date}, User: ${req.user.id}`);
-  
-  // Проверяем, закрыта ли дата
+  const targetDate = new Date(date); targetDate.setHours(0,0,0,0);
+  const today = new Date(); today.setHours(0,0,0,0);
+  if (targetDate < today) return res.status(400).json({ error: 'Past date' });
+
   db.get('SELECT id FROM closed_dates WHERE date = ?', [date], (err, row) => {
-    if (err) {
-      return res.status(500).json({ error: 'Database error' });
-    }
-    
     if (row) {
-      // Открываем дату
-      db.run('DELETE FROM closed_dates WHERE date = ?', [date], (err) => {
-        if (err) {
-          return res.status(500).json({ error: 'Failed to open date' });
-        }
-        res.json({ status: 'opened', date });
-      });
+      db.run('DELETE FROM closed_dates WHERE date = ?', [date], () => res.json({ status: 'opened' }));
     } else {
-      // Закрываем дату
-      db.run('INSERT INTO closed_dates (date, closed_by) VALUES (?, ?)', [date, req.user.id], (err) => {
-        if (err) {
-          return res.status(500).json({ error: 'Failed to close date' });
-        }
-        res.json({ status: 'closed', date });
-      });
+      db.run('INSERT INTO closed_dates (date, closed_by) VALUES (?, ?)', [date, req.user.id], () => res.json({ status: 'closed' }));
     }
   });
 });
 
-// Получить информацию о пользователе
 app.get('/api/user', authMiddleware, (req, res) => {
-  res.json({
-    id: req.user.id,
-    username: req.user.username,
-    firstName: req.user.first_name,
-    lastName: req.user.last_name,
-    role: req.userRole
+  res.json({ id: req.user.id, role: req.userRole });
+});
+
+// Экспорт в Excel (ручной запрос для теста)
+app.get('/api/export', authMiddleware, async (req, res) => {
+  if (req.userRole !== 'OWNER') return res.status(403).json({ error: 'Forbidden' });
+  
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('Closed Dates');
+  sheet.columns = [
+    { header: 'Дата', key: 'date', width: 15 },
+    { header: 'Кто закрыл (ID)', key: 'closed_by', width: 20 },
+    { header: 'Дата создания', key: 'created_at', width: 25 }
+  ];
+
+  db.all('SELECT * FROM closed_dates ORDER BY date DESC', [], async (err, rows) => {
+    rows.forEach(row => sheet.addRow(row));
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename=report.xlsx');
+    await workbook.xlsx.write(res);
+    res.end();
   });
 });
 
-// Добавить администратора (только OWNER)
-app.post('/api/admin/add', authMiddleware, requireOwner, (req, res) => {
-  const { telegramId } = req.body;
-  
-  if (!telegramId) {
-    return res.status(400).json({ error: 'Telegram ID required' });
-  }
-  
-  db.run(
-    'INSERT OR REPLACE INTO users (telegram_id, role) VALUES (?, ?)',
-    [telegramId, 'ADMIN'],
-    (err) => {
-      if (err) {
-        console.error('Add admin error:', err);
-        return res.status(500).json({ error: 'Internal server error' });
-      }
-      res.json({ success: true, message: 'Admin added' });
-    }
-  );
+// Еженедельный отчет (Cron)
+cron.schedule('0 9 * * 1', () => {
+  console.log('Generating weekly report...');
+  // Здесь можно добавить отправку в Telegram через бота, если будет BOT_TOKEN
 });
 
-// Удалить администратора (только OWNER)
-app.post('/api/admin/remove', authMiddleware, requireOwner, (req, res) => {
-  const { telegramId } = req.body;
-  
-  if (!telegramId) {
-    return res.status(400).json({ error: 'Telegram ID required' });
-  }
-  
-  db.run(
-    "UPDATE users SET role = 'VIEWER' WHERE telegram_id = ? AND role = 'ADMIN'",
-    [telegramId],
-    (err) => {
-      if (err) {
-        console.error('Remove admin error:', err);
-        return res.status(500).json({ error: 'Internal server error' });
-      }
-      res.json({ success: true, message: 'Admin removed' });
-    }
-  );
-});
+app.get('*', (req, res) => res.sendFile(path.join(staticPath, 'index.html')));
 
-// Инициализация владельца
-app.post('/api/init-owner', (req, res) => {
-  const { telegramId, secret } = req.body;
-  
-  if (secret !== process.env.INIT_SECRET) {
-    return res.status(403).json({ error: 'Invalid secret' });
-  }
-  
-  db.run(
-    'INSERT OR REPLACE INTO users (telegram_id, role) VALUES (?, ?)',
-    [telegramId, 'OWNER'],
-    (err) => {
-      if (err) {
-        console.error('Init owner error:', err);
-        return res.status(500).json({ error: 'Internal server error' });
-      }
-      res.json({ success: true, message: 'Owner initialized' });
-    }
-  );
-});
-
-// Получить настройки
-app.get('/api/settings', authMiddleware, (req, res) => {
-  db.get('SELECT background_image FROM settings LIMIT 1', (err, row) => {
-    if (err) {
-      console.error('Get settings error:', err);
-      return res.status(500).json({ error: 'Internal server error' });
-    }
-    res.json({ backgroundImage: row?.background_image || null });
-  });
-});
-
-// Обновить фон (только OWNER)
-app.post('/api/settings/background', authMiddleware, requireOwner, (req, res) => {
-  const { backgroundImage } = req.body;
-  
-  db.run(
-    'INSERT OR REPLACE INTO settings (id, background_image, updated_at) VALUES (1, ?, datetime("now"))',
-    [backgroundImage],
-    (err) => {
-      if (err) {
-        console.error('Update background error:', err);
-        return res.status(500).json({ error: 'Internal server error' });
-      }
-      res.json({ success: true, backgroundImage });
-    }
-  );
-});
-
-// Health check
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timezone: 'Europe/Moscow' });
-});
-
-// Serve frontend
-app.get('*', (req, res) => {
-  // Если запрос к API, но не найден - возвращаем 404
-  if (req.path.startsWith('/api/')) {
-    return res.status(404).json({ error: 'API route not found' });
-  }
-  // Для всех остальных путей (навигация фронтенда) возвращаем index.html
-  res.sendFile(path.join(staticPath, 'index.html'));
-});
-
-// Запуск сервера
 app.listen(PORT, async () => {
   console.log(`Server running on port ${PORT}`);
-  console.log(`Timezone: Europe/Moscow`);
-  
   await initDatabase();
 });
