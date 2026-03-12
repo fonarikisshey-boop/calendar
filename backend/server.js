@@ -14,7 +14,7 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = 'v1014';
+const APP_VERSION = 'v1015';
 
 // Инициализация бота
 const botToken = process.env.BOT_TOKEN;
@@ -204,8 +204,14 @@ app.post('/api/calendar/toggle', authMiddleware, async (req, res) => {
       console.log(`[TOGGLE SUCCESS] Date ${date} is now OPEN`);
       res.json({ status: 'opened' });
     } else {
-      await dbRun('INSERT INTO closed_dates (date, closed_by) VALUES (?, ?)', [date, req.user.id]);
-      console.log(`[TOGGLE SUCCESS] Date ${date} is now CLOSED`);
+      // Принудительно приводим ID пользователя к числу для PostgreSQL BIGINT
+      const userIdNum = parseInt(req.user.id.toString().replace(/[^0-9]/g, ''), 10);
+      if (isPostgres) {
+        await pool.query('INSERT INTO closed_dates (date, closed_by) VALUES ($1, $2)', [date, userIdNum]);
+      } else {
+        await dbRun('INSERT INTO closed_dates (date, closed_by) VALUES (?, ?)', [date, userIdNum]);
+      }
+      console.log(`[TOGGLE SUCCESS] Date ${date} is now CLOSED by ${userIdNum}`);
       res.json({ status: 'closed' });
     }
   } catch (err) {
