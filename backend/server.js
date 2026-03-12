@@ -138,7 +138,8 @@ async function authMiddleware(req, res, next) {
     
     req.user = user;
     const adminIds = (process.env.ADMIN_IDS || '').split(',').map(id => id.trim()).filter(id => id !== '');
-    const isEnvAdmin = adminIds.includes(user.id.toString());
+    const isEnvAdmin = adminIds.some(id => id === user.id.toString());
+    console.log(`[AUTH] Checking user ${user.id} against admins ${JSON.stringify(adminIds)}. Is Admin: ${isEnvAdmin}`);
 
     const row = await dbGet('SELECT role FROM users WHERE telegram_id = ?', [user.id]);
     let role = row ? row.role : 'VIEWER';
