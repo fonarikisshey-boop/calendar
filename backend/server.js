@@ -31,7 +31,6 @@ app.use(express.json());
 // Статические файлы
 const staticPath = path.resolve(__dirname, '../frontend/dist');
 
-// Правильные MIME типы для JS модулей
 app.use('/assets', express.static(path.join(staticPath, 'assets'), {
   setHeaders: (res, path) => {
     if (path.endsWith('.js')) {
@@ -56,10 +55,16 @@ async function initDatabase() {
       ssl: { rejectUnauthorized: false }
     });
     
+    // Хелпер для замены ? на $1::text, $2::text и т.д.
+    const transformSql = (sql) => {
+      let counter = 1;
+      return sql.replace(/\?/g, () => `$${counter++}::text`);
+    };
+
     db = {
-      all: (sql, params, cb) => pool.query(sql.replace(/\?/g, (m, i) => `$${i + 1}`), params).then(res => cb(null, res.rows)).catch(cb),
-      get: (sql, params, cb) => pool.query(sql.replace(/\?/g, (m, i) => `$${i + 1}`), params).then(res => cb(null, res.rows[0])).catch(cb),
-      run: (sql, params, cb) => pool.query(sql.replace(/\?/g, (m, i) => `$${i + 1}`), params).then(res => cb && cb(null)).catch(cb)
+      all: (sql, params, cb) => pool.query(transformSql(sql), params).then(res => cb(null, res.rows)).catch(cb),
+      get: (sql, params, cb) => pool.query(transformSql(sql), params).then(res => cb(null, res.rows[0])).catch(cb),
+      run: (sql, params, cb) => pool.query(transformSql(sql), params).then(res => cb && cb(null)).catch(cb)
     };
 
     await pool.query(`
@@ -165,7 +170,6 @@ app.post('/api/calendar/toggle', authMiddleware, (req, res) => {
     }
     
     if (row) {
-      console.log(`[TOGGLE] Date ${date} is already closed, opening it...`);
       db.run('DELETE FROM closed_dates WHERE date = ?', [date], (err2) => {
         if (err2) {
           console.error(`[TOGGLE ERROR] Delete failed: ${err2.message}`);
@@ -175,7 +179,6 @@ app.post('/api/calendar/toggle', authMiddleware, (req, res) => {
         res.json({ status: 'opened' });
       });
     } else {
-      console.log(`[TOGGLE] Date ${date} is open, closing it...`);
       db.run('INSERT INTO closed_dates (date, closed_by) VALUES (?, ?)', [date, req.user.id], (err2) => {
         if (err2) {
           console.error(`[TOGGLE ERROR] Insert failed: ${err2.message}`);
@@ -193,7 +196,6 @@ app.get('/api/user', authMiddleware, (req, res) => {
 });
 
 // Еженедельный отчет (Cron)
-// Каждое воскресенье в 21:00 по Москве (UTC+3, значит 18:00 UTC)
 cron.schedule('0 18 * * 0', async () => {
   console.log('Generating weekly report...');
   if (!bot) return;
