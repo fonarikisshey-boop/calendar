@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import './version.js'
 
-// CACHE_BUST: 1007
-// BUILD_TIMESTAMP: 2026-03-12-19-15-001
+// CACHE_BUST: 1008
+// BUILD_TIMESTAMP: 2026-03-12-19-25-001
 // FORCE_REBUILD: TRUE
 
-console.log('APP LOADED - CACHE_BUST: 1007, TIMESTAMP: 2026-03-12-19-15-001')
+console.log('APP LOADED - CACHE_BUST: 1008, TIMESTAMP: 2026-03-12-19-25-001')
 
 // Московское время (UTC+3) без внешних зависимостей
 
