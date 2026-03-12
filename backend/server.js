@@ -14,13 +14,14 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const APP_VERSION = 'v1014';
 
 // Инициализация бота
 const botToken = process.env.BOT_TOKEN;
 let bot;
 if (botToken) {
   bot = new TelegramBot(botToken, { polling: false });
-  console.log('[INIT] Telegram Bot initialized for reports');
+  console.log(`[INIT] Telegram Bot initialized for reports (${APP_VERSION})`);
 }
 
 // Middleware
@@ -83,8 +84,6 @@ async function initDatabase() {
 // Хелперы для БД
 async function dbQuery(sql, params = []) {
   if (isPostgres) {
-    const pgSql = sql.replace(/\?/g, (_, i) => `$${params.indexOf(params[i]) + 1}`); // Simple ? to $n conversion
-    // For more robust conversion:
     let count = 1;
     const finalSql = sql.replace(/\?/g, () => `$${count++}::text`);
     const res = await pool.query(finalSql, params);
@@ -137,15 +136,18 @@ async function authMiddleware(req, res, next) {
     else user = JSON.parse(new URLSearchParams(initData).get('user'));
     
     req.user = user;
-    const adminIds = (process.env.ADMIN_IDS || '').split(',').map(id => id.trim()).filter(id => id !== '');
-    const userIdStr = user.id.toString();
+    
+    // Продвинутая очистка списка админов от любых невидимых символов
+    const rawAdminIds = (process.env.ADMIN_IDS || '').split(',');
+    const adminIds = rawAdminIds.map(id => id.replace(/[^0-9]/g, '').trim()).filter(id => id !== '');
+    const userIdStr = user.id.toString().replace(/[^0-9]/g, '').trim();
     const isEnvAdmin = adminIds.includes(userIdStr);
     
-    console.log(`[AUTH] UserID: ${userIdStr}, AdminList: ${JSON.stringify(adminIds)}, Match: ${isEnvAdmin}`);
+    console.log(`[AUTH] UserID: "${userIdStr}", AdminList: ${JSON.stringify(adminIds)}, Match: ${isEnvAdmin}`);
 
     let role = isEnvAdmin ? 'OWNER' : 'VIEWER';
     
-    // Если не админ по конфигу, проверяем в БД (может быть назначен через БД)
+    // Если не админ по конфигу, проверяем в БД
     if (!isEnvAdmin) {
       try {
         const row = await dbGet('SELECT role FROM users WHERE telegram_id = ?', [user.id]);
@@ -183,7 +185,7 @@ app.get('/api/calendar', authMiddleware, async (req, res) => {
     const startDate = `${year}-${month.toString().padStart(2, '0')}-01`;
     const endDate = `${year}-${month.toString().padStart(2, '0')}-31`;
     const rows = await dbQuery('SELECT date FROM closed_dates WHERE date >= ? AND date <= ?', [startDate, endDate]);
-    res.json({ closedDates: (rows || []).map(r => r.date), userRole: req.userRole });
+    res.json({ closedDates: (rows || []).map(r => r.date), userRole: req.userRole, version: APP_VERSION });
   } catch (err) {
     console.error('[API ERROR] Get calendar failed:', err.message);
     res.status(500).json({ error: 'Failed to load dates' });
@@ -212,7 +214,7 @@ app.post('/api/calendar/toggle', authMiddleware, async (req, res) => {
   }
 });
 
-app.get('/api/user', authMiddleware, (req, res) => res.json({ id: req.user.id, role: req.userRole }));
+app.get('/api/user', authMiddleware, (req, res) => res.json({ id: req.user.id, role: req.userRole, version: APP_VERSION }));
 
 // Cron report
 cron.schedule('0 18 * * 0', async () => {
@@ -223,7 +225,8 @@ cron.schedule('0 18 * * 0', async () => {
     if (!rows || rows.length === 0) return;
     const report = rows.map(r => `📅 ${r.date}`).join('\n');
     const message = `📊 *Еженедельный отчет по бронированиям*\n\nСписок всех закрытых дат:\n${report}`;
-    const adminIds = (process.env.ADMIN_IDS || '').split(',').map(id => id.trim()).filter(id => id !== '');
+    const rawAdminIds = (process.env.ADMIN_IDS || '').split(',');
+    const adminIds = rawAdminIds.map(id => id.replace(/[^0-9]/g, '').trim()).filter(id => id !== '');
     for (const adminId of adminIds) {
       try { await bot.sendMessage(adminId, message, { parse_mode: 'Markdown' }); } 
       catch (e) { console.error(`[CRON ERROR] Failed to send to ${adminId}:`, e.message); }
@@ -234,6 +237,6 @@ cron.schedule('0 18 * * 0', async () => {
 app.get('*', (req, res) => res.sendFile(path.join(staticPath, 'index.html')));
 
 app.listen(PORT, async () => {
-  console.log(`[SERVER] Running on port ${PORT}`);
+  console.log(`[SERVER] Running v1014 on port ${PORT}`);
   await initDatabase();
 });
