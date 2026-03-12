@@ -7,7 +7,6 @@ import pg from 'pg';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import cron from 'node-cron';
-import ExcelJS from 'exceljs';
 import TelegramBot from 'node-telegram-bot-api';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -21,7 +20,7 @@ const botToken = process.env.BOT_TOKEN;
 let bot;
 if (botToken) {
   bot = new TelegramBot(botToken, { polling: false });
-  console.log('Telegram Bot initialized for reports');
+  console.log('[INIT] Telegram Bot initialized for reports');
 }
 
 // Middleware
@@ -30,79 +29,91 @@ app.use(express.json());
 
 // Статические файлы
 const staticPath = path.resolve(__dirname, '../frontend/dist');
-
 app.use('/assets', express.static(path.join(staticPath, 'assets'), {
   setHeaders: (res, path) => {
-    if (path.endsWith('.js')) {
-      res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
-    } else if (path.endsWith('.css')) {
-      res.setHeader('Content-Type', 'text/css; charset=utf-8');
-    }
+    if (path.endsWith('.js')) res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    else if (path.endsWith('.css')) res.setHeader('Content-Type', 'text/css; charset=utf-8');
   }
 }));
-
 app.use(express.static(staticPath));
 
 // База данных
-let db;
+let pool = null;
+let sqliteDb = null;
 const isPostgres = !!process.env.DATABASE_URL;
 
 async function initDatabase() {
   if (isPostgres) {
-    console.log('Using PostgreSQL database');
-    const pool = new pg.Pool({
+    console.log('[DB] Connecting to PostgreSQL...');
+    pool = new pg.Pool({
       connectionString: process.env.DATABASE_URL,
       ssl: { rejectUnauthorized: false }
     });
     
-    // Хелпер для замены ? на $1::text, $2::text и т.д.
-    const transformSql = (sql) => {
-      let counter = 1;
-      return sql.replace(/\?/g, () => `$${counter++}::text`);
-    };
-
-    db = {
-      all: (sql, params, cb) => pool.query(transformSql(sql), params).then(res => cb(null, res.rows)).catch(cb),
-      get: (sql, params, cb) => pool.query(transformSql(sql), params).then(res => cb(null, res.rows[0])).catch(cb),
-      run: (sql, params, cb) => pool.query(transformSql(sql), params).then(res => cb && cb(null)).catch(cb)
-    };
-
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS users (
-        id SERIAL PRIMARY KEY,
-        telegram_id BIGINT UNIQUE NOT NULL,
-        role TEXT NOT NULL DEFAULT 'VIEWER',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-      CREATE TABLE IF NOT EXISTS closed_dates (
-        id SERIAL PRIMARY KEY,
-        date TEXT UNIQUE NOT NULL,
-        closed_by BIGINT NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-      CREATE TABLE IF NOT EXISTS settings (
-        id INTEGER PRIMARY KEY DEFAULT 1,
-        background_image TEXT,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-      INSERT INTO settings (id, background_image) VALUES (1, NULL) ON CONFLICT (id) DO NOTHING;
-    `);
+    try {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS users (
+          id SERIAL PRIMARY KEY,
+          telegram_id BIGINT UNIQUE NOT NULL,
+          role TEXT NOT NULL DEFAULT 'VIEWER',
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS closed_dates (
+          id SERIAL PRIMARY KEY,
+          date TEXT UNIQUE NOT NULL,
+          closed_by BIGINT NOT NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+      console.log('[DB] PostgreSQL tables initialized');
+    } catch (err) {
+      console.error('[DB ERROR] PostgreSQL init failed:', err.message);
+    }
   } else {
-    console.log('Using SQLite database');
+    console.log('[DB] Using SQLite database');
     const dbPath = process.env.NODE_ENV === 'production' ? '/tmp/calendar.db' : './calendar.db';
-    const sqliteDb = new sqlite3.Database(dbPath);
-    db = sqliteDb;
-    
-    db.serialize(() => {
-      db.run(`CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_id INTEGER UNIQUE NOT NULL, role TEXT NOT NULL DEFAULT 'VIEWER', created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`);
-      db.run(`CREATE TABLE IF NOT EXISTS closed_dates (id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT UNIQUE NOT NULL, closed_by INTEGER NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`);
-      db.run(`CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY DEFAULT 1, background_image TEXT, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)`);
-      db.run(`INSERT OR IGNORE INTO settings (id, background_image) VALUES (1, NULL)`);
+    sqliteDb = new sqlite3.Database(dbPath);
+    sqliteDb.serialize(() => {
+      sqliteDb.run(`CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_id INTEGER UNIQUE NOT NULL, role TEXT NOT NULL DEFAULT 'VIEWER', created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`);
+      sqliteDb.run(`CREATE TABLE IF NOT EXISTS closed_dates (id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT UNIQUE NOT NULL, closed_by INTEGER NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`);
     });
   }
 }
 
-// Проверка подписи Telegram WebApp
+// Хелперы для БД
+async function dbQuery(sql, params = []) {
+  if (isPostgres) {
+    const pgSql = sql.replace(/\?/g, (_, i) => `$${params.indexOf(params[i]) + 1}`); // Simple ? to $n conversion
+    // For more robust conversion:
+    let count = 1;
+    const finalSql = sql.replace(/\?/g, () => `$${count++}::text`);
+    const res = await pool.query(finalSql, params);
+    return res.rows;
+  } else {
+    return new Promise((resolve, reject) => {
+      sqliteDb.all(sql, params, (err, rows) => err ? reject(err) : resolve(rows));
+    });
+  }
+}
+
+async function dbGet(sql, params = []) {
+  const rows = await dbQuery(sql, params);
+  return rows[0];
+}
+
+async function dbRun(sql, params = []) {
+  if (isPostgres) {
+    let count = 1;
+    const finalSql = sql.replace(/\?/g, () => `$${count++}::text`);
+    await pool.query(finalSql, params);
+  } else {
+    return new Promise((resolve, reject) => {
+      sqliteDb.run(sql, params, (err) => err ? reject(err) : resolve());
+    });
+  }
+}
+
+// Проверка подписи Telegram
 function verifyTelegramWebAppData(initData) {
   if (initData === 'browser_mode') return true;
   const secret = crypto.createHmac('sha256', 'WebAppData').update(process.env.BOT_TOKEN || '').digest();
@@ -114,112 +125,96 @@ function verifyTelegramWebAppData(initData) {
   return hmac === hash;
 }
 
-// Middleware авторизации
+// Auth Middleware
 async function authMiddleware(req, res, next) {
-  const initData = req.headers['x-telegram-init-data'];
-  if (!initData) return res.status(401).json({ error: 'No init data' });
-  if (!verifyTelegramWebAppData(initData)) return res.status(401).json({ error: 'Invalid signature' });
+  try {
+    const initData = req.headers['x-telegram-init-data'];
+    if (!initData) return res.status(401).json({ error: 'No init data' });
+    if (!verifyTelegramWebAppData(initData)) return res.status(401).json({ error: 'Invalid signature' });
 
-  let user;
-  if (initData === 'browser_mode') {
-    user = { id: 0, username: 'browser' };
-  } else {
-    const params = new URLSearchParams(initData);
-    user = JSON.parse(params.get('user'));
-  }
-  
-  req.user = user;
-  const adminIds = (process.env.ADMIN_IDS || '').split(',').map(id => id.trim()).filter(id => id !== '');
-  const isEnvAdmin = adminIds.includes(user.id.toString());
+    let user;
+    if (initData === 'browser_mode') user = { id: 0, username: 'browser' };
+    else user = JSON.parse(new URLSearchParams(initData).get('user'));
+    
+    req.user = user;
+    const adminIds = (process.env.ADMIN_IDS || '').split(',').map(id => id.trim()).filter(id => id !== '');
+    const isEnvAdmin = adminIds.includes(user.id.toString());
 
-  db.get('SELECT role FROM users WHERE telegram_id = ?', [user.id], (err, row) => {
+    const row = await dbGet('SELECT role FROM users WHERE telegram_id = ?', [user.id]);
     let role = row ? row.role : 'VIEWER';
     if (isEnvAdmin) role = 'OWNER';
     req.userRole = role;
     
     if (!row) {
-      db.run('INSERT INTO users (telegram_id, role) VALUES (?, ?)', [user.id, role], () => next());
-    } else {
-      if (row.role !== role) db.run('UPDATE users SET role = ? WHERE telegram_id = ?', [role, user.id]);
-      next();
+      await dbRun('INSERT INTO users (telegram_id, role) VALUES (?, ?)', [user.id, role]);
+    } else if (row.role !== role) {
+      await dbRun('UPDATE users SET role = ? WHERE telegram_id = ?', [role, user.id]);
     }
-  });
+    next();
+  } catch (err) {
+    console.error('[AUTH ERROR]', err.message);
+    res.status(500).json({ error: 'Auth internal error' });
+  }
 }
 
 // API Routes
-app.get('/api/calendar', authMiddleware, (req, res) => {
-  const { year, month } = req.query;
-  const startDate = `${year}-${month.toString().padStart(2, '0')}-01`;
-  const endDate = `${year}-${month.toString().padStart(2, '0')}-31`;
-  
-  db.all('SELECT date FROM closed_dates WHERE date >= ? AND date <= ?', [startDate, endDate], (err, rows) => {
-    res.json({ closedDates: rows || [], userRole: req.userRole });
-  });
+app.get('/api/calendar', authMiddleware, async (req, res) => {
+  try {
+    const { year, month } = req.query;
+    const startDate = `${year}-${month.toString().padStart(2, '0')}-01`;
+    const endDate = `${year}-${month.toString().padStart(2, '0')}-31`;
+    const rows = await dbQuery('SELECT date FROM closed_dates WHERE date >= ? AND date <= ?', [startDate, endDate]);
+    res.json({ closedDates: (rows || []).map(r => r.date), userRole: req.userRole });
+  } catch (err) {
+    console.error('[API ERROR] Get calendar failed:', err.message);
+    res.status(500).json({ error: 'Failed to load dates' });
+  }
 });
 
-app.post('/api/calendar/toggle', authMiddleware, (req, res) => {
-  if (req.userRole !== 'ADMIN' && req.userRole !== 'OWNER') return res.status(403).json({ error: 'Forbidden' });
-  const { date } = req.body;
-  
-  console.log(`[TOGGLE] Start processing date: ${date} by admin ${req.user.id}`);
+app.post('/api/calendar/toggle', authMiddleware, async (req, res) => {
+  try {
+    if (req.userRole !== 'ADMIN' && req.userRole !== 'OWNER') return res.status(403).json({ error: 'Forbidden' });
+    const { date } = req.body;
+    console.log(`[TOGGLE] Processing date: ${date} by admin ${req.user.id}`);
 
-  db.get('SELECT id FROM closed_dates WHERE date = ?', [date], (err, row) => {
-    if (err) {
-      console.error(`[TOGGLE ERROR] Select check failed: ${err.message}`);
-      return res.status(500).json({ error: 'Database error on check' });
-    }
-    
+    const row = await dbGet('SELECT id FROM closed_dates WHERE date = ?', [date]);
     if (row) {
-      db.run('DELETE FROM closed_dates WHERE date = ?', [date], (err2) => {
-        if (err2) {
-          console.error(`[TOGGLE ERROR] Delete failed: ${err2.message}`);
-          return res.status(500).json({ error: 'Database error on delete' });
-        }
-        console.log(`[TOGGLE SUCCESS] Date ${date} is now OPEN`);
-        res.json({ status: 'opened' });
-      });
+      await dbRun('DELETE FROM closed_dates WHERE date = ?', [date]);
+      console.log(`[TOGGLE SUCCESS] Date ${date} is now OPEN`);
+      res.json({ status: 'opened' });
     } else {
-      db.run('INSERT INTO closed_dates (date, closed_by) VALUES (?, ?)', [date, req.user.id], (err2) => {
-        if (err2) {
-          console.error(`[TOGGLE ERROR] Insert failed: ${err2.message}`);
-          return res.status(500).json({ error: 'Database error on insert' });
-        }
-        console.log(`[TOGGLE SUCCESS] Date ${date} is now CLOSED`);
-        res.json({ status: 'closed' });
-      });
+      await dbRun('INSERT INTO closed_dates (date, closed_by) VALUES (?, ?)', [date, req.user.id]);
+      console.log(`[TOGGLE SUCCESS] Date ${date} is now CLOSED`);
+      res.json({ status: 'closed' });
     }
-  });
+  } catch (err) {
+    console.error('[TOGGLE ERROR]', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.get('/api/user', authMiddleware, (req, res) => {
-  res.json({ id: req.user.id, role: req.userRole });
-});
+app.get('/api/user', authMiddleware, (req, res) => res.json({ id: req.user.id, role: req.userRole }));
 
-// Еженедельный отчет (Cron)
+// Cron report
 cron.schedule('0 18 * * 0', async () => {
-  console.log('Generating weekly report...');
+  console.log('[CRON] Generating weekly report...');
   if (!bot) return;
-
-  db.all('SELECT date FROM closed_dates ORDER BY date ASC', [], async (err, rows) => {
-    if (err || !rows || rows.length === 0) return;
-
+  try {
+    const rows = await dbQuery('SELECT date FROM closed_dates ORDER BY date ASC');
+    if (!rows || rows.length === 0) return;
     const report = rows.map(r => `📅 ${r.date}`).join('\n');
     const message = `📊 *Еженедельный отчет по бронированиям*\n\nСписок всех закрытых дат:\n${report}`;
-    
     const adminIds = (process.env.ADMIN_IDS || '').split(',').map(id => id.trim()).filter(id => id !== '');
     for (const adminId of adminIds) {
-      try {
-        await bot.sendMessage(adminId, message, { parse_mode: 'Markdown' });
-      } catch (e) {
-        console.error(`Failed to send report to ${adminId}:`, e.message);
-      }
+      try { await bot.sendMessage(adminId, message, { parse_mode: 'Markdown' }); } 
+      catch (e) { console.error(`[CRON ERROR] Failed to send to ${adminId}:`, e.message); }
     }
-  });
+  } catch (err) { console.error('[CRON ERROR]', err.message); }
 });
 
 app.get('*', (req, res) => res.sendFile(path.join(staticPath, 'index.html')));
 
 app.listen(PORT, async () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`[SERVER] Running on port ${PORT}`);
   await initDatabase();
 });
