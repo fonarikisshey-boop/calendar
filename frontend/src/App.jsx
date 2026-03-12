@@ -1,14 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import './version.js'
 
-// CACHE_BUST: 1013
-// BUILD_TIMESTAMP: 2026-03-12-20-15-001
+// CACHE_BUST: 1021
+// BUILD_TIMESTAMP: 2026-03-12-19-00-001
 // FORCE_REBUILD: TRUE
 
-console.log('APP LOADED - CACHE_BUST: 1013, TIMESTAMP: 2026-03-12-20-15-001')
+console.log('APP LOADED - CACHE_BUST: 1021, TIMESTAMP: 2026-03-12-19-00-001')
 
 // Московское время (UTC+3) без внешних зависимостей
-
 
 const formatDate = (date) => {
   return date.toISOString().split('T')[0]
@@ -139,7 +138,10 @@ function App() {
         body: JSON.stringify({ date: dateStr })
       })
       
-      if (!response.ok) throw new Error('Failed to toggle date')
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to toggle date')
+      }
       
       const data = await response.json()
       
@@ -204,19 +206,18 @@ function App() {
     for (let i = 1; i <= daysInMonth; i++) {
       const date = new Date(year, month, i)
       const dateStr = formatDate(date)
-      const todayDate = new Date(); todayDate.setHours(0, 0, 0, 0); 
-      // Для администраторов разрешаем клик по любой дате
-      const isPast = date.getTime() < todayDate.getTime();
+      // Убираем ограничение на прошедшие даты для OWNER/ADMIN
       const isClosed = closedDates.includes(dateStr)
       const isToday = dateStr === todayStr
       
       days.push({
+        type: 'day',
         day: i,
         dateStr,
-        isPast: canManageDates() ? false : isPast, // Админ видит все даты как активные
+        isPast: false, // Всегда разрешаем взаимодействие
         isClosed,
         isToday,
-        key: `day-${i}`
+        key: dateStr
       })
     }
     
@@ -328,14 +329,13 @@ function App() {
             return (
               <button
                 key={item.key}
-                onClick={() => !item.isPast && toggleDate(item.dateStr)}
-                disabled={item.isPast || !canManageDates()}
+                onClick={() => toggleDate(item.dateStr)}
+                disabled={!canManageDates()}
                 className={`
                   calendar-day
                   ${item.isClosed ? 'closed' : 'open'}
-                  ${item.isPast ? 'past' : ''}
                   ${item.isToday ? 'today' : ''}
-                  ${canManageDates() && !item.isPast ? 'cursor-pointer' : 'cursor-default'}
+                  ${canManageDates() ? 'cursor-pointer' : 'cursor-default'}
                 `}
               >
                 {item.day}

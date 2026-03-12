@@ -1,6 +1,6 @@
 {
   "name": "telegram-calendar-backend",
-  "version": "1.0.8",
+  "version": "1.0.0",
   "description": "Telegram Mini App Calendar Backend",
   "main": "server.js",
   "type": "module",
@@ -12,11 +12,7 @@
     "express": "^4.18.2",
     "cors": "^2.8.5",
     "sqlite3": "^5.1.6",
-    "dotenv": "^16.3.1",
-    "pg": "^8.11.5",
-    "node-cron": "^3.0.3",
-    "exceljs": "^4.4.0",
-    "node-telegram-bot-api": "^0.66.0"
+    "dotenv": "^16.3.1"
   },
   "engines": {
     "node": ">=18.0.0"
