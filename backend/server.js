@@ -156,15 +156,34 @@ app.post('/api/calendar/toggle', authMiddleware, (req, res) => {
   if (req.userRole !== 'ADMIN' && req.userRole !== 'OWNER') return res.status(403).json({ error: 'Forbidden' });
   const { date } = req.body;
   
-  // Для администраторов убираем все ограничения по датам. 
-  // Теперь можно закрывать и открывать любой день, включая сегодняшний и прошлые.
-  console.log(`[TOGGLE] Processing date: ${date} by admin ${req.user.id}`);
+  console.log(`[TOGGLE] Start processing date: ${date} by admin ${req.user.id}`);
 
   db.get('SELECT id FROM closed_dates WHERE date = ?', [date], (err, row) => {
+    if (err) {
+      console.error(`[TOGGLE ERROR] Select check failed: ${err.message}`);
+      return res.status(500).json({ error: 'Database error on check' });
+    }
+    
     if (row) {
-      db.run('DELETE FROM closed_dates WHERE date = ?', [date], () => res.json({ status: 'opened' }));
+      console.log(`[TOGGLE] Date ${date} is already closed, opening it...`);
+      db.run('DELETE FROM closed_dates WHERE date = ?', [date], (err2) => {
+        if (err2) {
+          console.error(`[TOGGLE ERROR] Delete failed: ${err2.message}`);
+          return res.status(500).json({ error: 'Database error on delete' });
+        }
+        console.log(`[TOGGLE SUCCESS] Date ${date} is now OPEN`);
+        res.json({ status: 'opened' });
+      });
     } else {
-      db.run('INSERT INTO closed_dates (date, closed_by) VALUES (?, ?)', [date, req.user.id], () => res.json({ status: 'closed' }));
+      console.log(`[TOGGLE] Date ${date} is open, closing it...`);
+      db.run('INSERT INTO closed_dates (date, closed_by) VALUES (?, ?)', [date, req.user.id], (err2) => {
+        if (err2) {
+          console.error(`[TOGGLE ERROR] Insert failed: ${err2.message}`);
+          return res.status(500).json({ error: 'Database error on insert' });
+        }
+        console.log(`[TOGGLE SUCCESS] Date ${date} is now CLOSED`);
+        res.json({ status: 'closed' });
+      });
     }
   });
 });
