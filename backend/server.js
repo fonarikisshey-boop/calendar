@@ -14,7 +14,7 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const APP_VERSION = 'v1015';
+const APP_VERSION = 'v1016';
 
 // Инициализация бота
 const botToken = process.env.BOT_TOKEN;
@@ -81,11 +81,12 @@ async function initDatabase() {
   }
 }
 
-// Хелперы для БД
+// Хелперы для БД (Улучшенные для PostgreSQL)
 async function dbQuery(sql, params = []) {
   if (isPostgres) {
+    // В PostgreSQL используем $1, $2 и НЕ добавляем ::text принудительно
     let count = 1;
-    const finalSql = sql.replace(/\?/g, () => `$${count++}::text`);
+    const finalSql = sql.replace(/\?/g, () => `$${count++}`);
     const res = await pool.query(finalSql, params);
     return res.rows;
   } else {
@@ -103,7 +104,7 @@ async function dbGet(sql, params = []) {
 async function dbRun(sql, params = []) {
   if (isPostgres) {
     let count = 1;
-    const finalSql = sql.replace(/\?/g, () => `$${count++}::text`);
+    const finalSql = sql.replace(/\?/g, () => `$${count++}`);
     await pool.query(finalSql, params);
   } else {
     return new Promise((resolve, reject) => {
@@ -136,11 +137,12 @@ async function authMiddleware(req, res, next) {
     else user = JSON.parse(new URLSearchParams(initData).get('user'));
     
     req.user = user;
+    const userIdNum = parseInt(user.id.toString().replace(/[^0-9]/g, ''), 10);
     
-    // Продвинутая очистка списка админов от любых невидимых символов
+    // Продвинутая очистка списка админов
     const rawAdminIds = (process.env.ADMIN_IDS || '').split(',');
     const adminIds = rawAdminIds.map(id => id.replace(/[^0-9]/g, '').trim()).filter(id => id !== '');
-    const userIdStr = user.id.toString().replace(/[^0-9]/g, '').trim();
+    const userIdStr = userIdNum.toString();
     const isEnvAdmin = adminIds.includes(userIdStr);
     
     console.log(`[AUTH] UserID: "${userIdStr}", AdminList: ${JSON.stringify(adminIds)}, Match: ${isEnvAdmin}`);
@@ -150,7 +152,7 @@ async function authMiddleware(req, res, next) {
     // Если не админ по конфигу, проверяем в БД
     if (!isEnvAdmin) {
       try {
-        const row = await dbGet('SELECT role FROM users WHERE telegram_id = ?', [user.id]);
+        const row = await dbGet('SELECT role FROM users WHERE telegram_id = ?', [userIdNum]);
         if (row && row.role) role = row.role;
       } catch (e) {
         console.error('[AUTH DB ERROR]', e.message);
@@ -158,15 +160,14 @@ async function authMiddleware(req, res, next) {
     }
 
     req.userRole = role;
-    console.log(`[AUTH] Final assigned role: ${req.userRole}`);
     
     // Фоновое обновление/создание пользователя в БД
     try {
-      const existing = await dbGet('SELECT role FROM users WHERE telegram_id = ?', [user.id]);
+      const existing = await dbGet('SELECT role FROM users WHERE telegram_id = ?', [userIdNum]);
       if (!existing) {
-        await dbRun('INSERT INTO users (telegram_id, role) VALUES (?, ?)', [user.id, role]);
+        await dbRun('INSERT INTO users (telegram_id, role) VALUES (?, ?)', [userIdNum, role]);
       } else if (existing.role !== role) {
-        await dbRun('UPDATE users SET role = ? WHERE telegram_id = ?', [role, user.id]);
+        await dbRun('UPDATE users SET role = ? WHERE telegram_id = ?', [role, userIdNum]);
       }
     } catch (e) {
       console.error('[AUTH DB SYNC ERROR]', e.message);
@@ -196,7 +197,8 @@ app.post('/api/calendar/toggle', authMiddleware, async (req, res) => {
   try {
     if (req.userRole !== 'ADMIN' && req.userRole !== 'OWNER') return res.status(403).json({ error: 'Forbidden' });
     const { date } = req.body;
-    console.log(`[TOGGLE] Processing date: ${date} by admin ${req.user.id}`);
+    const userIdNum = parseInt(req.user.id.toString().replace(/[^0-9]/g, ''), 10);
+    console.log(`[TOGGLE] Processing date: ${date} by admin ${userIdNum}`);
 
     const row = await dbGet('SELECT id FROM closed_dates WHERE date = ?', [date]);
     if (row) {
@@ -204,13 +206,7 @@ app.post('/api/calendar/toggle', authMiddleware, async (req, res) => {
       console.log(`[TOGGLE SUCCESS] Date ${date} is now OPEN`);
       res.json({ status: 'opened' });
     } else {
-      // Принудительно приводим ID пользователя к числу для PostgreSQL BIGINT
-      const userIdNum = parseInt(req.user.id.toString().replace(/[^0-9]/g, ''), 10);
-      if (isPostgres) {
-        await pool.query('INSERT INTO closed_dates (date, closed_by) VALUES ($1, $2)', [date, userIdNum]);
-      } else {
-        await dbRun('INSERT INTO closed_dates (date, closed_by) VALUES (?, ?)', [date, userIdNum]);
-      }
+      await dbRun('INSERT INTO closed_dates (date, closed_by) VALUES (?, ?)', [date, userIdNum]);
       console.log(`[TOGGLE SUCCESS] Date ${date} is now CLOSED by ${userIdNum}`);
       res.json({ status: 'closed' });
     }
@@ -243,6 +239,6 @@ cron.schedule('0 18 * * 0', async () => {
 app.get('*', (req, res) => res.sendFile(path.join(staticPath, 'index.html')));
 
 app.listen(PORT, async () => {
-  console.log(`[SERVER] Running v1014 on port ${PORT}`);
+  console.log(`[SERVER] Running ${APP_VERSION} on port ${PORT}`);
   await initDatabase();
 });
